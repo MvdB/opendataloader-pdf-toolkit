@@ -1,0 +1,49 @@
+# Enterprise / sidecar layout: API and the hybrid OCR backend run as separate
+# services. The API image stays lean; the backend can be scaled or swapped.
+# For a single-container deployment, skip compose and use the Dockerfile
+# directly with ENABLE_OCR=true (entrypoint then manages the hybrid subprocess).
+
+services:
+  hybrid:
+    image: pdf-toolkit:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    entrypoint: []
+    command:
+      - opendataloader-pdf-hybrid
+      - --port
+      - "5002"
+      - --force-ocr
+      - --ocr-lang
+      - ${OCR_LANG:-en}
+    expose:
+      - "5002"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import socket; s=socket.create_connection(('127.0.0.1',5002),1); s.close()" || exit 1
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  api:
+    image: pdf-toolkit:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    depends_on:
+      hybrid:
+        condition: service_healthy
+    environment:
+      HYBRID_URL: http://hybrid:5002
+      ENABLE_OCR: "true"
+      PROFILE: ${PROFILE:-rag}
+      SANITIZE: "true"
+      HYBRID_FULL: ${HYBRID_FULL:-false}
+    ports:
+      - "${PORT:-8080}:8080"
+    volumes:
+      - ./data/in:/data/in
+      - ./data/out:/data/out

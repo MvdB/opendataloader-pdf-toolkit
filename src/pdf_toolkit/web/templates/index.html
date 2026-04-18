@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>pdf-toolkit</title>
+<style>
+:root { color-scheme: light dark; }
+body {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  max-width: 900px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+  line-height: 1.5;
+}
+h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+.sub { color: #888; margin-top: 0; margin-bottom: 2rem; }
+fieldset { border: 1px solid #8884; border-radius: 6px; padding: 1rem; }
+legend { padding: 0 0.5rem; font-weight: 600; }
+label { display: inline-block; margin-right: 1rem; }
+select, input[type=file] { font: inherit; }
+button {
+  font: inherit; padding: 0.5rem 1rem; border: 0;
+  border-radius: 4px; background: #2f6feb; color: #fff; cursor: pointer;
+}
+button:disabled { opacity: 0.5; cursor: wait; }
+table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #8883; font-size: 0.9rem; vertical-align: top; }
+.status-queued { color: #888; }
+.status-running { color: #d97706; }
+.status-succeeded { color: #059669; }
+.status-failed { color: #dc2626; }
+.files a { display: inline-block; margin-right: 0.6rem; font-size: 0.85rem; }
+code { font-size: 0.85em; }
+</style>
+</head>
+<body>
+<h1>pdf-toolkit</h1>
+<p class="sub">Upload PDFs, pick a profile, download structured output.</p>
+
+<fieldset>
+  <legend>Submit</legend>
+  <form id="upload-form">
+    <p>
+      <label>Profile
+        <select name="profile">
+          <option value="rag"{% if profile == "rag" %} selected{% endif %}>rag (markdown + json)</option>
+          <option value="structured"{% if profile == "structured" %} selected{% endif %}>structured (json)</option>
+          <option value="review"{% if profile == "review" %} selected{% endif %}>review (annotated pdf + json)</option>
+          <option value="all"{% if profile == "all" %} selected{% endif %}>all</option>
+        </select>
+      </label>
+      <label><input type="checkbox" name="ocr" value="true"> OCR (scanned PDFs)</label>
+    </p>
+    <p>
+      <input type="file" name="files" accept="application/pdf" multiple required>
+      <button type="submit">Convert</button>
+    </p>
+  </form>
+</fieldset>
+
+<h2 style="margin-top: 2rem; font-size: 1.1rem;">Jobs</h2>
+<table id="jobs">
+  <thead><tr><th>ID</th><th>Profile</th><th>OCR</th><th>Status</th><th>Created</th><th>Files</th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<script>
+const form = document.getElementById("upload-form");
+const tbody = document.querySelector("#jobs tbody");
+
+form.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const btn = form.querySelector("button");
+  btn.disabled = true;
+  try {
+    const fd = new FormData(form);
+    const resp = await fetch("/jobs", { method: "POST", body: fd });
+    if (!resp.ok) throw new Error(await resp.text());
+    form.reset();
+    await refresh();
+  } catch (e) {
+    alert("Submit failed: " + e);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+function encodePath(p) {
+  return p.split("/").map(encodeURIComponent).join("/");
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function loadFiles(id, cell) {
+  const resp = await fetch(`/jobs/${id}/files`);
+  if (!resp.ok) return;
+  const files = await resp.json();
+  cell.innerHTML = files
+    .map(f => `<a href="/jobs/${id}/files/${encodePath(f)}">${escapeHtml(f)}</a>`)
+    .join("");
+}
+
+async function refresh() {
+  const resp = await fetch("/jobs");
+  if (!resp.ok) return;
+  const jobs = await resp.json();
+  jobs.sort((a, b) => b.created_at.localeCompare(a.created_at));
+  tbody.innerHTML = "";
+  for (const j of jobs) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><code>${j.id.slice(0, 8)}</code></td>
+      <td>${escapeHtml(j.profile)}</td>
+      <td>${j.ocr ? "yes" : "no"}</td>
+      <td class="status-${j.status}">${j.status}${j.error ? " — " + escapeHtml(j.error) : ""}</td>
+      <td>${new Date(j.created_at).toLocaleString()}</td>
+      <td class="files" data-id="${j.id}"></td>
+    `;
+    tbody.appendChild(tr);
+    if (j.status === "succeeded") {
+      loadFiles(j.id, tr.querySelector(".files"));
+    }
+  }
+}
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>
