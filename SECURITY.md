@@ -13,6 +13,12 @@ Include, if possible: a minimal reproduction, the affected version (`pdf-toolkit
 - **Hybrid backend isolation.** The OCR / picture-description backend can run as a sidecar container (`docker-compose.yml`), isolating its process from the public-facing API.
 - **Path-traversal protection** on the `GET /jobs/{id}/files/{path}` download route.
 
+## Enrichment-layer egress
+
+The optional enrichment layer (`pdf-toolkit-enrich`, installed via the `[enrich]` extra) sends chunk text and, for figure re-captioning, image bytes to whatever endpoint you configure via `LLM_BASE_URL`. There is no silent fallback to a public cloud — if the env var is unset, the default is `https://api.openai.com/v1`, so you will notice.
+
+Before enabling enrichment on sensitive documents, confirm the data-handling policy of the configured endpoint and verify its URL. For personal use, pointing `LLM_BASE_URL` at a local vLLM or Ollama instance keeps content on-device.
+
 ## Known risks and non-mitigations
 
 - **No authentication by default.** The web UI binds to `0.0.0.0` and accepts uploads from anyone who can reach the port. Deploy behind an authenticating reverse proxy (Keycloak / OIDC / your SSO) before exposing to untrusted networks. The `auth.py` dependency seam in `src/pdf_toolkit/web/` is reserved for plugging in OIDC verification without touching route bodies.

@@ -11,6 +11,7 @@ The primary use case is producing RAG-ready Markdown and structured JSON (with b
 - **Prompt-injection filtering** (`sanitize=True`) enabled by default on every profile.
 - **Async job API** — upload PDFs, poll for completion, download per-file outputs.
 - **Dockerized** — single-container (hybrid managed internally) or `docker-compose` sidecar layout for enterprise deployments.
+- **Enrichment layer (opt-in)** — post-process the extracted JSON into RAG-ready chunks with embeddings, per-chunk summaries + keywords, VLM-generated figure re-captions, and taxonomy tags. Talks to any OpenAI-compatible endpoint (enterprise gateway, vLLM, Ollama, LM Studio).
 
 ## Requirements
 
@@ -30,6 +31,11 @@ pdf-toolkit scanned.pdf -o out --profile rag --ocr          # spawns hybrid back
 
 # Web UI at http://localhost:8080
 uvicorn pdf_toolkit.web.app:app --reload --port 8080
+
+# Enrich the extraction into a chunked, embedded sidecar (requires [enrich] extra + an LLM endpoint)
+pip install -e ".[enrich]"
+export LLM_BASE_URL=... LLM_API_KEY=... LLM_MODEL=... EMBEDDING_MODEL=... VLM_MODEL=...
+pdf-toolkit-enrich out/test.json --all --taxonomy taxonomy.yml
 ```
 
 Benchmarked on a 216-page, 31 MB born-digital book: 216 pages processed in ≈ 5 s on a 16-thread laptop, producing 508 KB of Markdown, 1.3 MB of JSON (1 841 semantically typed blocks), and 36 externalized images.
@@ -75,7 +81,7 @@ See [CLAUDE.md](CLAUDE.md) for module-by-module notes, key design invariants, an
 ## Status and non-goals
 
 - v0.1 scaffold. Single-user, in-process jobs (lost on restart). **No authentication by default** — put the service behind an authenticating reverse proxy (Keycloak / OIDC / your SSO) before exposing it to untrusted networks. An `auth.py` seam is reserved in the code for OIDC verification.
-- **No external LLM calls.** Opendataloader's hybrid mode does picture descriptions locally with SmolVLM-256M. Any future enrichment service (summarization, re-captioning, embeddings) will live in a separate, opt-in module that talks to a provider-neutral OpenAI-compatible endpoint — it is explicitly not part of this repo today.
+- **Extraction makes no external LLM calls.** Opendataloader's hybrid mode does picture descriptions locally with SmolVLM-256M. The optional enrichment layer (`pdf-toolkit-enrich`) is the only component that talks to an LLM, and only to the endpoint you configure via `LLM_BASE_URL`. There is no fallback to a public cloud endpoint. For personal use, `docker-compose.vllm.yml` brings up a vLLM sidecar (set `VLLM_MODEL` to Gemma 4 E2B/E4B or another OpenAI-compat-servable model).
 
 ## Security
 

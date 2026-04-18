@@ -29,7 +29,9 @@ src/pdf_toolkit/
 docker/Dockerfile           multi-stage; runtime has JRE + tini + the venv. Spawns hybrid iff ENABLE_OCR=true and HYBRID_URL unset.
 docker/entrypoint.sh        owns hybrid subprocess lifecycle, then exec uvicorn.
 docker-compose.yml          enterprise / sidecar layout: separate `hybrid` and `api` services; api points at HYBRID_URL=http://hybrid:5002.
+src/pdf_toolkit/enrich/   optional post-processing layer (chunker + LLM enrichers).
 tests/test_convert.py       unit tests over build_kwargs (no Java required).
+tests/test_chunker.py        unit tests for the chunker (no LLM / no Java required).
 main.py                     tiny launcher — `python main.py --help` dispatches into pdf_toolkit.cli.
 ```
 
@@ -38,7 +40,7 @@ main.py                     tiny launcher — `python main.py --help` dispatches
 - **One core, many clients.** `convert.convert()` is the single source of truth. The CLI and the FastAPI layer are thin clients over it — do NOT duplicate extraction logic into the web layer.
 - **Hybrid lifecycle is "A-then-optional-B".** Default (A): our CLI or the Docker entrypoint spawns `opendataloader-pdf-hybrid` when OCR is requested. Override (B): set `HYBRID_URL` / `--hybrid-url` to point at an externally managed backend (sidecar container, separate host). There is only one hybrid client.
 - **`sanitize=True` by default everywhere.** Prompt-injection filtering is a governance default, not an ergonomic one. Only disable via explicit `--no-sanitize` / `SANITIZE=false`.
-- **No LLM enrichment in this repo yet.** Hybrid mode's picture descriptions use SmolVLM-256M bundled inside the backend — opendataloader does not expose a pluggable external LLM hook. A future, separate service may post-process opendataloader output through an OpenAI-compatible endpoint (enterprise gateway in prod; vLLM + Gemma 4 E2B/E4B for personal use). Don't add LLM code here without discussion.
+- **LLM enrichment lives in `src/pdf_toolkit/enrich/`, strictly as a separate pass.** Extraction (`convert.py`) does not touch an LLM. Enrichment reads the JSON opendataloader produced and writes a `*_enriched.json` sidecar with chunks + optional embeddings / summaries / VLM re-captions / taxonomy tags. See the "Enrichment layer" section below.
 - **Jobs are in-process and lost on restart.** Acceptable for the sample. Before production use, replace `JobRegistry` with a durable backend (Redis + ARQ recommended) — the async interface doesn't need to change.
 
 ## Commands
@@ -85,6 +87,22 @@ Docker — sidecar layout (enterprise):
 ```bash
 docker compose up --build
 ```
+
+## Enrichment layer
+
+`src/pdf_toolkit/enrich/` post-processes opendataloader JSON into RAG-ready chunks with four opt-in capabilities — embeddings, summaries + keywords, figure re-captioning via VLM, and taxonomy tagging. Output is a `<basename>_enriched.json` sidecar next to the source JSON.
+
+- `chunker.py` walks the opendataloader block tree, strips page chrome (header/footer) by default, flushes at heading boundaries, and accumulates text up to `target_chars`. Tables are linearized (cell-by-cell); lists respect `list items`; images become `FigureRef`s attached to the surrounding chunk. A chunk carries `heading_path`, `page_start/end`, `block_ids`, `block_types`, and mutable enrichment fields (`embedding`, `summary`, `keywords`, `tags`).
+- `client.py` is a thin wrapper over the `openai` SDK pointed at any OpenAI-compatible endpoint via env vars — `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `EMBEDDING_MODEL`, `VLM_MODEL`. Enterprise: point at your gateway. Personal: `docker-compose.vllm.yml` brings up a vLLM sidecar (requires NVIDIA Container Toolkit; set `VLLM_MODEL` to a Gemma 4 E2B/E4B HF repo id or any other OpenAI-compat-servable model).
+- `enrichers.py` has one function per capability; each is a no-op when its option flag is off. Enrichers only populate fields on `Chunk`; missing fields must remain legal for any downstream consumer.
+- `pipeline.py` orchestrates: chunk → (re-caption → embed → summarize → tag) → write sidecar.
+- `cli.py` is a separate entry point: `pdf-toolkit-enrich out/rag/test.json --all --taxonomy taxonomy.yml`.
+
+### Enrichment invariants
+
+- Never bake a provider default. The client reads the URL from env; never fall back to a public cloud endpoint silently.
+- An empty chunk with figures but no text is legal output (typical at cover pages / figure-only regions). Consumers decide whether to index them.
+- Install lives in the `[enrich]` extra so the base install stays lean for users who only want extraction.
 
 ## Conventions
 

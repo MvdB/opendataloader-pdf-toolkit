@@ -1,0 +1,50 @@
+# Optional compose overlay: adds a vLLM service serving an OpenAI-compatible
+# chat endpoint for the enrichment layer. Intended for personal / single-GPU
+# workstations. Enterprise deployments should point `LLM_BASE_URL` at the
+# existing gateway and skip this file entirely.
+#
+# Usage:
+#   VLLM_MODEL=<hf-repo-id-for-gemma-4-e2b-or-e4b> \
+#   docker compose -f docker-compose.yml -f docker-compose.vllm.yml up --build
+#
+# Requires the NVIDIA Container Toolkit; adjust the deploy section for other
+# accelerators (ROCm, CPU-only).
+
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    command:
+      - --model
+      - ${VLLM_MODEL:?set VLLM_MODEL to the Hugging Face repo id of the model you want served (e.g. Gemma 4 E2B/E4B)}
+      - --max-model-len
+      - "8192"
+    expose:
+      - "8000"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+    volumes:
+      - ${HF_CACHE_DIR:-./.cache/huggingface}:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import socket; s=socket.create_connection(('127.0.0.1',8000),2); s.close()" || exit 1
+      interval: 20s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+
+  api:
+    environment:
+      LLM_BASE_URL: http://vllm:8000/v1
+      LLM_API_KEY: EMPTY
+      LLM_MODEL: ${VLLM_MODEL}
+    depends_on:
+      vllm:
+        condition: service_healthy

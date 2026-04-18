@@ -13,10 +13,12 @@ dependencies = [
 
 [project.optional-dependencies]
 ocr = ["opendataloader-pdf[hybrid]>=2.2.1"]
+enrich = ["openai>=1.60", "pyyaml>=6.0"]
 dev = ["pytest>=8", "httpx>=0.27"]
 
 [project.scripts]
 pdf-toolkit = "pdf_toolkit.cli:main"
+pdf-toolkit-enrich = "pdf_toolkit.enrich.cli:main"
 
 [build-system]
 requires = ["hatchling"]
