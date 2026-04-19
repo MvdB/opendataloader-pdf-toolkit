@@ -12,12 +12,30 @@
 
 services:
   vllm:
-    image: vllm/vllm-openai:latest
+    # Pinned to a concrete tag because "latest" on vllm/vllm-openai churns
+    # frequently and flag compatibility changes between releases. Bump deliberately.
+    image: vllm/vllm-openai:v0.19.1
+    # Proven flags for Gemma 4 E2B on an 8 GB consumer GPU (tested on RTX 4060):
+    #   - bf16 weights (~4 GB) + fp8 KV cache (~40 MB/seq at 4k ctx).
+    #   - gpu-memory-utilization 0.85 leaves ~1 GB for the OS / desktop compositor.
+    #   - max-model-len 4096 covers typical RAG chunks + prompt + generation.
+    #   - enforce-eager disables CUDA graphs; reduces memory, slight perf hit.
+    # Override via env for bigger GPUs or different models.
     command:
       - --model
-      - ${VLLM_MODEL:?set VLLM_MODEL to the Hugging Face repo id of the model you want served (e.g. Gemma 4 E2B/E4B)}
+      - ${VLLM_MODEL:?set VLLM_MODEL to the Hugging Face repo id of the model you want served (e.g. google/gemma-4-E2B-it)}
+      - --dtype
+      - ${VLLM_DTYPE:-bfloat16}
       - --max-model-len
-      - "8192"
+      - "${VLLM_MAX_MODEL_LEN:-4096}"
+      - --max-num-seqs
+      - "${VLLM_MAX_NUM_SEQS:-2}"
+      - --gpu-memory-utilization
+      - "${VLLM_GPU_UTIL:-0.85}"
+      - --kv-cache-dtype
+      - "${VLLM_KV_CACHE_DTYPE:-fp8}"
+      - --enforce-eager
+      - --trust-remote-code
     expose:
       - "8000"
     environment:

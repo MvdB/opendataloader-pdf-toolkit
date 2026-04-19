@@ -9,13 +9,14 @@ from .client import LLMClient
 
 
 def add_embeddings(chunks: list[Chunk], client: LLMClient, batch_size: int = 64) -> None:
-    texts = [c.text for c in chunks]
-    for start in range(0, len(texts), batch_size):
-        batch = texts[start:start + batch_size]
+    # Skip empty-text chunks — embedding "" is degenerate and pollutes retrieval.
+    targets = [c for c in chunks if c.text.strip()]
+    for start in range(0, len(targets), batch_size):
+        batch = targets[start:start + batch_size]
         if not batch:
             continue
-        vectors = client.embed(batch)
-        for chunk, vec in zip(chunks[start:start + batch_size], vectors):
+        vectors = client.embed([c.text for c in batch])
+        for chunk, vec in zip(batch, vectors):
             chunk.embedding = vec
 
 
@@ -28,6 +29,10 @@ SUMMARY_SYSTEM = (
 
 def add_summaries(chunks: list[Chunk], client: LLMClient) -> None:
     for chunk in chunks:
+        # Skip empty-text chunks — asking the LLM to summarize nothing produces
+        # confident hallucinations (observed on cover-page / figure-only chunks).
+        if not chunk.text.strip():
+            continue
         prompt = (
             f"Heading path: {' > '.join(chunk.heading_path) or '(root)'}\n\n"
             f"Chunk:\n{chunk.text}"
@@ -59,6 +64,8 @@ def add_taxonomy_tags(
 ) -> None:
     tax_str = json.dumps(taxonomy, indent=2, ensure_ascii=False)
     for chunk in chunks:
+        if not chunk.text.strip():
+            continue
         prompt = (
             f"Taxonomy:\n{tax_str}\n\n"
             f"Heading path: {' > '.join(chunk.heading_path) or '(root)'}\n\n"

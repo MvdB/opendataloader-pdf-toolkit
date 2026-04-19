@@ -17,6 +17,7 @@ class EnrichmentOptions:
     recaption: bool = False
     taxonomy: dict[str, list[str]] | None = None
     target_chunk_chars: int = 1500
+    limit: int | None = None
 
     def requires_llm(self) -> bool:
         return self.embed or self.summarize or self.recaption or bool(self.taxonomy)
@@ -30,6 +31,8 @@ def enrich(
     """Chunk + enrich an opendataloader JSON; write a sidecar, return its path."""
     src = Path(json_path)
     chunks = chunk_document(src, target_chars=options.target_chunk_chars)
+    if options.limit is not None:
+        chunks = chunks[: options.limit]
 
     client: LLMClient | None = None
     if options.requires_llm():
