@@ -8,6 +8,7 @@ from typing import Any
 from .chunker import chunk_document
 from .client import LLMClient, LLMConfig
 from .enrichers import add_embeddings, add_summaries, add_taxonomy_tags, recaption_figures
+from .markdown import render_markdown
 
 
 @dataclass
@@ -17,7 +18,9 @@ class EnrichmentOptions:
     recaption: bool = False
     taxonomy: dict[str, list[str]] | None = None
     target_chunk_chars: int = 1500
+    offset: int = 0
     limit: int | None = None
+    write_markdown: bool = False
 
     def requires_llm(self) -> bool:
         return self.embed or self.summarize or self.recaption or bool(self.taxonomy)
@@ -31,6 +34,8 @@ def enrich(
     """Chunk + enrich an opendataloader JSON; write a sidecar, return its path."""
     src = Path(json_path)
     chunks = chunk_document(src, target_chars=options.target_chunk_chars)
+    if options.offset:
+        chunks = chunks[options.offset :]
     if options.limit is not None:
         chunks = chunks[: options.limit]
 
@@ -57,4 +62,7 @@ def enrich(
         "chunks": [c.to_dict() for c in chunks],
     }
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    if options.write_markdown:
+        md_path = src.with_name(src.stem + "_enriched.md")
+        md_path.write_text(render_markdown(payload), encoding="utf-8")
     return out_path

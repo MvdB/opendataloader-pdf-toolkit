@@ -12,6 +12,8 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from ..convert import ConvertOptions, convert
+from ..enrich.pipeline import EnrichmentOptions
+from ..enrich.pipeline import enrich as enrich_document
 from .auth import require_auth
 from .jobs import JobRegistry, JobStatus, now_utc
 
@@ -38,9 +40,11 @@ templates = Jinja2Templates(directory=WEB_DIR / "templates")
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request, _: None = Depends(require_auth)) -> HTMLResponse:
+    # Starlette 1.0 requires request as the first positional arg of TemplateResponse.
     return templates.TemplateResponse(
+        request,
         "index.html",
-        {"request": request, "profile": DEFAULT_PROFILE},
+        {"profile": DEFAULT_PROFILE},
     )
 
 
@@ -53,12 +57,25 @@ async def health() -> dict[str, str]:
 async def create_job(
     profile: str = Form(DEFAULT_PROFILE),
     ocr: bool = Form(False),
+    enrich: bool = Form(False),
+    enrich_summarize: bool = Form(False),
+    enrich_recaption: bool = Form(False),
+    enrich_embed: bool = Form(False),
+    enrich_markdown: bool = Form(False),
     files: list[UploadFile] = File(...),
     _: None = Depends(require_auth),
 ) -> dict[str, str]:
     if not files:
         raise HTTPException(400, "no files uploaded")
-    job = await registry.create(profile=profile, ocr=ocr)
+    job = await registry.create(
+        profile=profile,
+        ocr=ocr,
+        enrich=enrich,
+        enrich_summarize=enrich_summarize,
+        enrich_recaption=enrich_recaption,
+        enrich_embed=enrich_embed,
+        enrich_markdown=enrich_markdown,
+    )
     job_in = OUTPUT_DIR / job.id / "in"
     job_out = OUTPUT_DIR / job.id / "out"
     job_in.mkdir(parents=True, exist_ok=True)
@@ -72,18 +89,18 @@ async def create_job(
         input_paths=[str(p) for p in sorted(job_in.iterdir())],
         output_dir=str(job_out),
     )
-    asyncio.create_task(_run_job(job.id, profile, ocr))
+    asyncio.create_task(_run_job(job.id))
     return {"job_id": job.id}
 
 
-async def _run_job(job_id: str, profile: str, ocr: bool) -> None:
+async def _run_job(job_id: str) -> None:
     job = await registry.get(job_id)
     if job is None:
         return
     await registry.update(job_id, status=JobStatus.running)
-    opts = ConvertOptions(
-        profile=profile,  # type: ignore[arg-type] — runtime-validated by the library
-        ocr=ocr,
+    convert_opts = ConvertOptions(
+        profile=job.profile,  # type: ignore[arg-type] — runtime-validated by the library
+        ocr=job.ocr,
         sanitize=DEFAULT_SANITIZE,
         hybrid_url=HYBRID_URL,
         hybrid_full=HYBRID_FULL,
@@ -93,11 +110,35 @@ async def _run_job(job_id: str, profile: str, ocr: bool) -> None:
             convert,
             [Path(p) for p in job.input_paths],
             Path(job.output_dir),
-            opts,
+            convert_opts,
         )
-    except Exception as exc:  # surface any backend failure to the job record
-        await registry.update(job_id, status=JobStatus.failed, error=repr(exc), finished_at=now_utc())
+    except Exception as exc:  # surface any extraction failure to the job record
+        await registry.update(job_id, status=JobStatus.failed, error=f"extract: {exc!r}", finished_at=now_utc())
         return
+
+    if job.enrich:
+        enrich_opts = EnrichmentOptions(
+            summarize=job.enrich_summarize,
+            recaption=job.enrich_recaption,
+            embed=job.enrich_embed,
+            write_markdown=job.enrich_markdown,
+        )
+        try:
+            for json_file in sorted(Path(job.output_dir).glob("*.json")):
+                # Skip our own previous sidecars if we ever re-run
+                if json_file.name.endswith("_enriched.json"):
+                    continue
+                await asyncio.to_thread(enrich_document, json_file, enrich_opts)
+        except Exception as exc:
+            # Extraction succeeded; surface enrichment failure without destroying the raw output.
+            await registry.update(
+                job_id,
+                status=JobStatus.failed,
+                error=f"enrich: {exc!r} (extraction output is still available)",
+                finished_at=now_utc(),
+            )
+            return
+
     await registry.update(job_id, status=JobStatus.succeeded, finished_at=now_utc())
 
 

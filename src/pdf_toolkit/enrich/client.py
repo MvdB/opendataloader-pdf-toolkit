@@ -16,6 +16,12 @@ class LLMConfig:
     chat_model: str | None = None
     embedding_model: str | None = None
     vlm_model: str | None = None
+    # Optional per-function base-URL overrides. Useful when the chat model and
+    # the embedding model live behind different endpoints — e.g. vLLM serving
+    # Gemma 4 for chat + Ollama serving nomic-embed-text for embeddings.
+    # When unset, each call uses `base_url`.
+    embedding_base_url: str | None = None
+    vlm_base_url: str | None = None
     timeout: float = 120.0
 
     @classmethod
@@ -27,6 +33,8 @@ class LLMConfig:
             chat_model=os.environ.get("LLM_MODEL"),
             embedding_model=os.environ.get("EMBEDDING_MODEL"),
             vlm_model=os.environ.get("VLM_MODEL"),
+            embedding_base_url=os.environ.get("EMBEDDING_BASE_URL") or None,
+            vlm_base_url=os.environ.get("VLM_BASE_URL") or None,
             timeout=float(os.environ.get("LLM_TIMEOUT", "120")),
         )
 
@@ -36,11 +44,17 @@ class LLMClient:
 
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
-        self._client = OpenAI(
-            base_url=config.base_url,
-            api_key=config.api_key,
-            timeout=config.timeout,
-        )
+        self._clients: dict[str, OpenAI] = {}
+
+    def _client(self, base_url: str | None) -> OpenAI:
+        url = base_url or self.config.base_url
+        if url not in self._clients:
+            self._clients[url] = OpenAI(
+                base_url=url,
+                api_key=self.config.api_key,
+                timeout=self.config.timeout,
+            )
+        return self._clients[url]
 
     def complete(
         self,
@@ -57,7 +71,7 @@ class LLMClient:
         kwargs: dict[str, Any] = {}
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
-        resp = self._client.chat.completions.create(
+        resp = self._client(None).chat.completions.create(
             model=_resolve(model, self.config.chat_model, "LLM_MODEL"),
             messages=messages,
             **kwargs,
@@ -65,7 +79,7 @@ class LLMClient:
         return (resp.choices[0].message.content or "").strip()
 
     def embed(self, texts: list[str], *, model: str | None = None) -> list[list[float]]:
-        resp = self._client.embeddings.create(
+        resp = self._client(self.config.embedding_base_url).embeddings.create(
             model=_resolve(model, self.config.embedding_model, "EMBEDDING_MODEL"),
             input=texts,
         )
@@ -84,7 +98,7 @@ class LLMClient:
         user_prompt = "Describe this figure for a RAG index. Be concise (1-3 sentences)."
         if hint:
             user_prompt += f" {hint}"
-        resp = self._client.chat.completions.create(
+        resp = self._client(self.config.vlm_base_url).chat.completions.create(
             model=_resolve(model, self.config.vlm_model, "VLM_MODEL"),
             messages=[{
                 "role": "user",

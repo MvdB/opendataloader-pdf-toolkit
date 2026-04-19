@@ -18,6 +18,9 @@ env/
 
 .claude/
 
+# Working notes — keep on disk, not in the repo.
+TODO.md
+
 .DS_Store
 Thumbs.db
 

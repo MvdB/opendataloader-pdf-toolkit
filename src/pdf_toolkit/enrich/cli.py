@@ -25,7 +25,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Shortcut for --embed --summarize --recaption (taxonomy still requires --taxonomy)",
     )
     p.add_argument("--chunk-chars", type=int, default=1500, help="Target chunk size in characters")
-    p.add_argument("--limit", type=int, help="Only enrich the first N chunks (useful for smoke tests)")
+    p.add_argument("--offset", type=int, default=0, help="Skip the first N chunks before applying --limit")
+    p.add_argument("--limit", type=int, help="Only enrich N chunks (after --offset; useful for smoke tests)")
+    p.add_argument(
+        "--markdown",
+        action="store_true",
+        help="Also write a human-readable <basename>_enriched.md alongside the JSON sidecar",
+    )
 
     g = p.add_argument_group("LLM overrides (otherwise env vars LLM_BASE_URL / LLM_API_KEY / LLM_MODEL / EMBEDDING_MODEL / VLM_MODEL)")
     g.add_argument("--base-url")
@@ -60,7 +66,9 @@ def main(argv: list[str] | None = None) -> int:
         recaption=args.recaption or args.all,
         taxonomy=_load_taxonomy(args.taxonomy) if args.taxonomy else None,
         target_chunk_chars=args.chunk_chars,
+        offset=args.offset,
         limit=args.limit,
+        write_markdown=args.markdown,
     )
     config = LLMConfig.from_env()
     if args.base_url:

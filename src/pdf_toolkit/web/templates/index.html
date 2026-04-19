@@ -50,7 +50,15 @@ code { font-size: 0.85em; }
         </select>
       </label>
       <label><input type="checkbox" name="ocr" value="true"> OCR (scanned PDFs)</label>
+      <label><input type="checkbox" name="enrich" value="true" id="enrich-toggle"> Enrich after extraction</label>
     </p>
+    <fieldset id="enrich-options" style="display:none; border:1px dashed #8884; margin: 0.25rem 0 0.75rem 0;">
+      <legend style="font-weight: normal; font-size: 0.85rem;">Enrichment (requires a configured LLM endpoint)</legend>
+      <label><input type="checkbox" name="enrich_summarize" value="true"> Summaries + keywords</label>
+      <label><input type="checkbox" name="enrich_recaption" value="true"> Figure re-captions (VLM)</label>
+      <label><input type="checkbox" name="enrich_embed" value="true"> Embeddings</label>
+      <label><input type="checkbox" name="enrich_markdown" value="true" checked> Enriched markdown sidecar</label>
+    </fieldset>
     <p>
       <input type="file" name="files" accept="application/pdf" multiple required>
       <button type="submit">Convert</button>
@@ -67,6 +75,11 @@ code { font-size: 0.85em; }
 <script>
 const form = document.getElementById("upload-form");
 const tbody = document.querySelector("#jobs tbody");
+const enrichToggle = document.getElementById("enrich-toggle");
+const enrichOptions = document.getElementById("enrich-options");
+enrichToggle.addEventListener("change", () => {
+  enrichOptions.style.display = enrichToggle.checked ? "" : "none";
+});
 
 form.addEventListener("submit", async (ev) => {
   ev.preventDefault();

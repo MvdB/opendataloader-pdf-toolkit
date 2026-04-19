@@ -24,6 +24,11 @@ class Job:
     id: str
     profile: str = "rag"
     ocr: bool = False
+    enrich: bool = False
+    enrich_summarize: bool = False
+    enrich_recaption: bool = False
+    enrich_embed: bool = False
+    enrich_markdown: bool = False
     status: JobStatus = JobStatus.queued
     input_paths: list[str] = field(default_factory=list)
     output_dir: str = ""
