@@ -14,6 +14,17 @@ def web_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     in_dir.mkdir()
     out_dir.mkdir()
 
+    # Defensive: force the auth seam to its "no-op" state regardless of what
+    # earlier tests in the session (notably test_auth) did to the module.
+    # CI caught a leak where test_auth's module-level KEYCLOAK_JWKS_URL
+    # wasn't cleanly reverted by monkeypatch between test modules, and
+    # test_web_api requests started getting 401'd.
+    from pdf_toolkit.web import auth as auth_module
+    monkeypatch.setattr(auth_module, "KEYCLOAK_JWKS_URL", None)
+    monkeypatch.setattr(auth_module, "KEYCLOAK_AUDIENCE", None)
+    monkeypatch.setattr(auth_module, "KEYCLOAK_ISSUER", None)
+    monkeypatch.setattr(auth_module, "KEYCLOAK_REQUIRED_SCOPE", None)
+
     # Set env before importing so the module-level constants pick it up.
     monkeypatch.setenv("INPUT_DIR", str(in_dir))
     monkeypatch.setenv("OUTPUT_DIR", str(out_dir))
