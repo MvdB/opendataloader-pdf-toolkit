@@ -88,6 +88,86 @@ Docker — sidecar layout (enterprise):
 docker compose up --build
 ```
 
+## Offline OCR runbook
+
+Running OCR on a sensitive scan with `--network none` requires pre-warming two model caches in persistent volumes. The `opendataloader-pdf-hybrid` server inside the image loads both `easyocr` and `docling` weights on first use via Hugging Face Hub, and exposes no `--artifacts-path` flag — so skipping the warmup and just flipping `--network none` blows up mid-scan with `LocalEntryNotFoundError` on the first image-only page.
+
+### One-time warmup (network on)
+
+Three throwaway containers populate two persistent volumes. The model files are public / anonymous on the Hub; no HF token required.
+
+```bash
+# 1. easyocr models per target language. 'en' alone is ~94 MB; 'de'+'en' ≈ 110 MB.
+#    Add every language you expect to see in scans — missing ones can't be pulled
+#    later when the container runs offline.
+MSYS_NO_PATHCONV=1 docker run --rm \
+  --entrypoint /opt/venv/bin/python \
+  -v pdf-toolkit-easyocr-cache:/root/.EasyOCR \
+  pdf-toolkit:latest \
+  -c "import easyocr; easyocr.Reader(['de','en'], gpu=False, download_enabled=True)"
+
+# 2. Docling weight files (layout, tableformer, tableformerv2, smolvlm).
+#    This writes to /root/.cache/docling/models — but only refs/metadata land
+#    in the HF cache volume, NOT the blobs the hybrid server actually reads.
+MSYS_NO_PATHCONV=1 docker run --rm \
+  --entrypoint /opt/venv/bin/docling-tools \
+  -v pdf-toolkit-hf-cache:/root/.cache/huggingface \
+  pdf-toolkit:latest \
+  models download layout tableformer tableformerv2 smolvlm
+
+# 3. Force docling to populate the HF cache with blobs + snapshots by running
+#    a real convert on a synthetic image-only PDF. This is the step that
+#    actually makes the offline run work — without it, step 2 alone leaves
+#    the HF cache at ~1.8 MB (refs only). After this: ~500 MB.
+MSYS_NO_PATHCONV=1 docker run --rm \
+  --entrypoint /opt/venv/bin/python \
+  -v pdf-toolkit-hf-cache:/root/.cache/huggingface \
+  -v pdf-toolkit-easyocr-cache:/root/.EasyOCR \
+  pdf-toolkit:latest -c "
+from PIL import Image, ImageDraw
+img = Image.new('RGB', (1200, 1600), 'white')
+ImageDraw.Draw(img).text((60, 60), 'probetext', fill='black')
+img.save('/tmp/synth.pdf', 'PDF', resolution=150.0)
+from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.datamodel.base_models import InputFormat
+opts = PdfPipelineOptions(); opts.do_ocr = True; opts.do_table_structure = True
+opts.ocr_options.lang = ['de', 'en']
+DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)}).convert('/tmp/synth.pdf')
+"
+```
+
+### Steady-state isolated run
+
+```bash
+docker run -d --name pdf-toolkit-scan \
+  --network none \
+  -v "$PWD/data/in:/data/in" -v "$PWD/data/out:/data/out" \
+  -v pdf-toolkit-hf-cache:/root/.cache/huggingface \
+  -v pdf-toolkit-easyocr-cache:/root/.EasyOCR \
+  -e ENABLE_OCR=true -e OCR_LANG=de,en \
+  -e HF_HUB_OFFLINE=1 -e TRANSFORMERS_OFFLINE=1 \
+  pdf-toolkit:latest
+```
+
+`--network none` + both `*_OFFLINE=1` env vars together guarantee no outbound call is even attempted. Drop any one and the first OCR'd page blows up.
+
+Trigger a job via `docker exec` (the container has no port exposed when `--network none`):
+
+```bash
+MSYS_NO_PATHCONV=1 docker exec pdf-toolkit-scan sh -c \
+  '/opt/venv/bin/pdf-toolkit "/data/in/<your-file>.pdf" -o /data/out/scan \
+     --profile rag --ocr --hybrid-url http://127.0.0.1:5002 --ocr-lang de,en'
+```
+
+Benchmark: ~29 min for a 90-page mixed PDF (19 text-layer pages + 71 image-only pages) on a 4-core CPU via docling + easyocr. Scales roughly linearly with the number of image-only pages.
+
+### Known gotchas
+
+- **Windows git-bash path mangling.** Without `MSYS_NO_PATHCONV=1`, any absolute container path (`/opt/venv/...`) becomes a Windows path (`C:/Program Files/Git/opt/...`) before `docker` sees it. Every `docker exec` and `--entrypoint` invocation above needs the prefix.
+- **OpenCV runtime libs.** `easyocr` imports `cv2`, which dynamically loads `libxcb`, `libgl1`, `libglib2.0-0`, `libsm6`, `libxext6`, `libxrender1`. The Dockerfile installs them — don't strip them out "for image size."
+- **Blank scan pages with bleedthrough.** `easyocr` has no "page is nearly blank" gate and will happily hallucinate gibberish from faint show-through on reverse-side scans. Either filter at the chunker level or pre-skip low ink-density pages before OCR.
+
 ## Enrichment layer
 
 `src/pdf_toolkit/enrich/` post-processes opendataloader JSON into RAG-ready chunks with four opt-in capabilities — embeddings, summaries + keywords, figure re-captioning via VLM, and taxonomy tagging. Output is a `<basename>_enriched.json` sidecar next to the source JSON.
