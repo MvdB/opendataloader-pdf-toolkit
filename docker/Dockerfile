@@ -25,7 +25,19 @@ ENV PATH="/opt/venv/bin:$PATH" \
     HYBRID_PORT=5002
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends default-jre-headless tini \
+ && apt-get install -y --no-install-recommends \
+      default-jre-headless \
+      tini \
+      # OpenCV runtime libs — easyocr pulls opencv-python, which dynamically
+      # loads these. Without them, `import cv2` dies with
+      # `libxcb.so.1: cannot open shared object file` and the OCR path is
+      # completely broken (you only find out when a scanned page arrives).
+      libgl1 \
+      libglib2.0-0 \
+      libxcb1 \
+      libsm6 \
+      libxext6 \
+      libxrender1 \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/venv /opt/venv
