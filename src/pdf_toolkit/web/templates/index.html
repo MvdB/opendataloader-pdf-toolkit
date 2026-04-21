@@ -62,6 +62,9 @@ code { font-size: 0.85em; }
     <p>
       <input type="file" name="files" accept="application/pdf" multiple required>
       <button type="submit">Convert</button>
+      <button type="button" id="ingest-btn" title="Process every PDF already sitting in the mounted INPUT_DIR">
+        Process INPUT_DIR
+      </button>
     </p>
   </form>
 </fieldset>
@@ -79,6 +82,26 @@ const enrichToggle = document.getElementById("enrich-toggle");
 const enrichOptions = document.getElementById("enrich-options");
 enrichToggle.addEventListener("change", () => {
   enrichOptions.style.display = enrichToggle.checked ? "" : "none";
+});
+
+document.getElementById("ingest-btn").addEventListener("click", async () => {
+  const btn = document.getElementById("ingest-btn");
+  btn.disabled = true;
+  try {
+    // Take everything on the form except the file input.
+    const fd = new FormData(form);
+    fd.delete("files");
+    const resp = await fetch("/jobs/ingest-folder", { method: "POST", body: fd });
+    const body = await resp.text();
+    if (!resp.ok) throw new Error(body);
+    const parsed = JSON.parse(body);
+    alert(`Job ${parsed.job_id.slice(0,8)} queued for ${parsed.files.length} file(s)`);
+    await refresh();
+  } catch (e) {
+    alert("Ingest failed: " + e);
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 form.addEventListener("submit", async (ev) => {

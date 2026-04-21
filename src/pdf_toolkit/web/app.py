@@ -67,13 +67,10 @@ async def create_job(
 ) -> dict[str, str]:
     if not files:
         raise HTTPException(400, "no files uploaded")
-    job = await registry.create(
-        profile=profile,
-        ocr=ocr,
-        enrich=enrich,
-        enrich_summarize=enrich_summarize,
-        enrich_recaption=enrich_recaption,
-        enrich_embed=enrich_embed,
+    job = await _new_job(
+        profile=profile, ocr=ocr,
+        enrich=enrich, enrich_summarize=enrich_summarize,
+        enrich_recaption=enrich_recaption, enrich_embed=enrich_embed,
         enrich_markdown=enrich_markdown,
     )
     job_in = OUTPUT_DIR / job.id / "in"
@@ -91,6 +88,48 @@ async def create_job(
     )
     asyncio.create_task(_run_job(job.id))
     return {"job_id": job.id}
+
+
+@app.post("/jobs/ingest-folder")
+async def ingest_folder(
+    profile: str = Form(DEFAULT_PROFILE),
+    ocr: bool = Form(False),
+    enrich: bool = Form(False),
+    enrich_summarize: bool = Form(False),
+    enrich_recaption: bool = Form(False),
+    enrich_embed: bool = Form(False),
+    enrich_markdown: bool = Form(False),
+    _: None = Depends(require_auth),
+) -> dict:
+    """Process every PDF already present under INPUT_DIR — no upload required.
+
+    Handy for batch ingestion when a host folder is mounted into the container.
+    Files are read in place; the job's output_dir still goes under OUTPUT_DIR/<job>.
+    """
+    if not INPUT_DIR.exists():
+        raise HTTPException(404, f"INPUT_DIR {INPUT_DIR} does not exist")
+    pdfs = sorted(p for p in INPUT_DIR.glob("*.pdf") if p.is_file())
+    if not pdfs:
+        raise HTTPException(404, f"no PDFs found directly under {INPUT_DIR}")
+    job = await _new_job(
+        profile=profile, ocr=ocr,
+        enrich=enrich, enrich_summarize=enrich_summarize,
+        enrich_recaption=enrich_recaption, enrich_embed=enrich_embed,
+        enrich_markdown=enrich_markdown,
+    )
+    job_out = OUTPUT_DIR / job.id / "out"
+    job_out.mkdir(parents=True, exist_ok=True)
+    await registry.update(
+        job.id,
+        input_paths=[str(p) for p in pdfs],
+        output_dir=str(job_out),
+    )
+    asyncio.create_task(_run_job(job.id))
+    return {"job_id": job.id, "files": [p.name for p in pdfs]}
+
+
+async def _new_job(**fields: object):  # pragma: no cover — trivial wrapper
+    return await registry.create(**fields)
 
 
 async def _run_job(job_id: str) -> None:
