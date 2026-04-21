@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, Protocol
 
 
 class JobStatus(str, Enum):
@@ -43,8 +45,46 @@ class Job:
         data["finished_at"] = self.finished_at.isoformat() if self.finished_at else None
         return data
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Job":
+        return cls(
+            id=data["id"],
+            profile=data.get("profile", "rag"),
+            ocr=bool(data.get("ocr", False)),
+            enrich=bool(data.get("enrich", False)),
+            enrich_summarize=bool(data.get("enrich_summarize", False)),
+            enrich_recaption=bool(data.get("enrich_recaption", False)),
+            enrich_embed=bool(data.get("enrich_embed", False)),
+            enrich_markdown=bool(data.get("enrich_markdown", False)),
+            status=JobStatus(data.get("status", JobStatus.queued.value)),
+            input_paths=list(data.get("input_paths") or []),
+            output_dir=data.get("output_dir", ""),
+            error=data.get("error"),
+            created_at=_parse_dt(data.get("created_at")) or now_utc(),
+            finished_at=_parse_dt(data.get("finished_at")),
+        )
 
-class JobRegistry:
+
+def _parse_dt(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(value)
+
+
+class JobRegistry(Protocol):
+    """Registry contract for durable or in-process job tracking."""
+
+    async def create(self, **fields: Any) -> Job: ...
+    async def update(self, job_id: str, **fields: Any) -> Job: ...
+    async def get(self, job_id: str) -> Job | None: ...
+    async def all(self) -> list[Job]: ...
+
+
+class InMemoryJobRegistry:
+    """Default registry. Loses state on restart — fine for single-process samples."""
+
     def __init__(self) -> None:
         self._jobs: dict[str, Job] = {}
         self._lock = asyncio.Lock()
@@ -69,3 +109,65 @@ class JobRegistry:
     async def all(self) -> list[Job]:
         async with self._lock:
             return list(self._jobs.values())
+
+
+class RedisJobRegistry:
+    """Redis-backed registry — survives restarts, can be shared across replicas.
+
+    Storage layout:
+      job:<id>     JSON blob of Job.to_dict()
+      jobs:all     set of known job ids (for the list endpoint)
+
+    Concurrency: a per-process asyncio lock wraps read-modify-write; this is
+    sufficient for single-writer deployments. For multi-worker setups, swap in
+    WATCH/MULTI or short-lived Redis locks.
+    """
+
+    def __init__(self, client: Any) -> None:
+        self._redis = client
+        self._lock = asyncio.Lock()
+
+    @classmethod
+    def from_url(cls, url: str) -> "RedisJobRegistry":
+        import redis.asyncio as aioredis  # local import — redis is in the [redis] extra
+        return cls(aioredis.from_url(url, decode_responses=True))
+
+    async def create(self, **fields: Any) -> Job:
+        async with self._lock:
+            job = Job(id=uuid.uuid4().hex, **fields)
+            await self._redis.set(f"job:{job.id}", json.dumps(job.to_dict()))
+            await self._redis.sadd("jobs:all", job.id)
+            return job
+
+    async def update(self, job_id: str, **fields: Any) -> Job:
+        async with self._lock:
+            raw = await self._redis.get(f"job:{job_id}")
+            if raw is None:
+                raise KeyError(job_id)
+            job = Job.from_dict(json.loads(raw))
+            for key, value in fields.items():
+                setattr(job, key, value)
+            await self._redis.set(f"job:{job_id}", json.dumps(job.to_dict()))
+            return job
+
+    async def get(self, job_id: str) -> Job | None:
+        raw = await self._redis.get(f"job:{job_id}")
+        return Job.from_dict(json.loads(raw)) if raw else None
+
+    async def all(self) -> list[Job]:
+        ids = await self._redis.smembers("jobs:all")
+        jobs: list[Job] = []
+        for job_id in ids:
+            raw = await self._redis.get(f"job:{job_id}")
+            if raw:
+                jobs.append(Job.from_dict(json.loads(raw)))
+        return jobs
+
+
+def create_registry() -> JobRegistry:
+    """Factory — reads `JOB_REGISTRY` (memory|redis) from env, default memory."""
+    backend = os.environ.get("JOB_REGISTRY", "memory").strip().lower()
+    if backend == "redis":
+        url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+        return RedisJobRegistry.from_url(url)
+    return InMemoryJobRegistry()

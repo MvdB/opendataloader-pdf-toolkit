@@ -1,0 +1,36 @@
+# Optional compose overlay: adds a Redis service so the job registry survives
+# restarts. The api service switches from the default in-memory registry to
+# RedisJobRegistry via JOB_REGISTRY=redis + REDIS_URL.
+#
+# Usage (layer with the base compose):
+#   docker compose -f docker-compose.yml -f docker-compose.redis.yml up --build
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: pdf-toolkit-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    expose:
+      - "6379"
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  api:
+    environment:
+      JOB_REGISTRY: redis
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  redis-data:

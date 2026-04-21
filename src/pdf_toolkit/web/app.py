@@ -15,7 +15,7 @@ from ..convert import ConvertOptions, convert
 from ..enrich.pipeline import EnrichmentOptions
 from ..enrich.pipeline import enrich as enrich_document
 from .auth import require_auth
-from .jobs import JobRegistry, JobStatus, now_utc
+from .jobs import JobStatus, create_registry, now_utc
 
 WEB_DIR = Path(__file__).parent
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/data/out"))
@@ -25,7 +25,7 @@ DEFAULT_SANITIZE = os.environ.get("SANITIZE", "true").lower() == "true"
 HYBRID_URL = os.environ.get("HYBRID_URL") or None
 HYBRID_FULL = os.environ.get("HYBRID_FULL", "false").lower() == "true"
 
-registry = JobRegistry()
+registry = create_registry()
 
 
 @asynccontextmanager
