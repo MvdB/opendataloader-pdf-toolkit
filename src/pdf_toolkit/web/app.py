@@ -12,8 +12,6 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from ..convert import ConvertOptions, convert
-from ..enrich.pipeline import EnrichmentOptions
-from ..enrich.pipeline import enrich as enrich_document
 from .auth import require_auth
 from .jobs import JobStatus, create_registry, now_utc
 
@@ -156,6 +154,10 @@ async def _run_job(job_id: str) -> None:
         return
 
     if job.enrich:
+        # Lazy import so the base image / pure-extraction install doesn't need openai.
+        from ..enrich.pipeline import EnrichmentOptions
+        from ..enrich.pipeline import enrich as enrich_document
+
         enrich_opts = EnrichmentOptions(
             summarize=job.enrich_summarize,
             recaption=job.enrich_recaption,

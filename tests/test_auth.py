@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import time
 from typing import Any
 
@@ -49,22 +48,14 @@ def _configured_auth_module(
     issuer: str | None = "https://kc.example/realms/test",
     required_scope: str | None = None,
 ):
-    monkeypatch.setenv("KEYCLOAK_JWKS_URL", "http://fake-jwks.invalid/certs")
-    if audience is not None:
-        monkeypatch.setenv("KEYCLOAK_AUDIENCE", audience)
-    else:
-        monkeypatch.delenv("KEYCLOAK_AUDIENCE", raising=False)
-    if issuer is not None:
-        monkeypatch.setenv("KEYCLOAK_ISSUER", issuer)
-    else:
-        monkeypatch.delenv("KEYCLOAK_ISSUER", raising=False)
-    if required_scope is not None:
-        monkeypatch.setenv("KEYCLOAK_REQUIRED_SCOPE", required_scope)
-    else:
-        monkeypatch.delenv("KEYCLOAK_REQUIRED_SCOPE", raising=False)
-
+    # Patch the module-level constants directly — monkeypatch.setattr reverts
+    # at test teardown, which importlib.reload() would NOT, and stale module
+    # state leaking across tests is how we broke test_web_api earlier.
     from pdf_toolkit.web import auth as auth_module
-    importlib.reload(auth_module)
+    monkeypatch.setattr(auth_module, "KEYCLOAK_JWKS_URL", "http://fake-jwks.invalid/certs")
+    monkeypatch.setattr(auth_module, "KEYCLOAK_AUDIENCE", audience)
+    monkeypatch.setattr(auth_module, "KEYCLOAK_ISSUER", issuer)
+    monkeypatch.setattr(auth_module, "KEYCLOAK_REQUIRED_SCOPE", required_scope)
 
     class _FakeKey:
         def __init__(self, key: bytes) -> None:
@@ -89,9 +80,8 @@ def _client_with(auth_module) -> TestClient:
 
 
 def test_noop_when_jwks_unset(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("KEYCLOAK_JWKS_URL", raising=False)
     from pdf_toolkit.web import auth as auth_module
-    importlib.reload(auth_module)
+    monkeypatch.setattr(auth_module, "KEYCLOAK_JWKS_URL", None)
     client = _client_with(auth_module)
     # No header required when auth isn't configured.
     r = client.get("/protected")

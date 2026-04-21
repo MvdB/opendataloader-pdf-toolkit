@@ -49,7 +49,11 @@ def web_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         return Path(json_path)
 
     monkeypatch.setattr(app_module, "convert", fake_convert)
-    monkeypatch.setattr(app_module, "enrich_document", fake_enrich)
+    # `enrich_document` is now lazy-imported inside `_run_job`, so the patch
+    # must target the pipeline module itself — that's where the `from ..enrich.pipeline
+    # import enrich as enrich_document` binds at call time.
+    import pdf_toolkit.enrich.pipeline as _pipeline
+    monkeypatch.setattr(_pipeline, "enrich", fake_enrich)
 
     client = TestClient(app_module.app)
     client.input_dir = in_dir  # type: ignore[attr-defined]

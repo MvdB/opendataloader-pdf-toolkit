@@ -7,7 +7,7 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 COPY pyproject.toml /app/
 COPY src /app/src
-RUN pip install --upgrade pip && pip install ".[ocr]"
+RUN pip install --upgrade pip && pip install ".[ocr,enrich,auth,redis]"
 
 FROM python:3.13-slim-bookworm AS runtime
 ENV PATH="/opt/venv/bin:$PATH" \
