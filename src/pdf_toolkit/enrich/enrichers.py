@@ -21,9 +21,18 @@ def add_embeddings(chunks: list[Chunk], client: LLMClient, batch_size: int = 64)
 
 
 SUMMARY_SYSTEM = (
-    "You write one-sentence summaries and short keyword lists for chunks of a document used in a RAG index. "
+    "You write a one-sentence summary and a short keyword list for a chunk of a document "
+    "that will be retrieved by semantic search. "
+    "Both the summary and the keywords must be SPECIFIC and DISCRIMINATIVE: prefer named "
+    "entities, distinctive concepts, and concrete technical terms that appear in this "
+    "chunk. AVOID generic filler words like \"book\", \"section\", \"framework\", "
+    "\"accessibility\", \"overview\", \"introduction\", or any word that would describe "
+    "most chunks equally well. Use the heading path for context but do not just restate it. "
+    "If the chunk is a table of contents, copyright page, or other boilerplate, say so "
+    "plainly in the summary instead of paraphrasing it.\n\n"
     'Respond ONLY with a JSON object of the form {"summary": str, "keywords": [str, ...]}. '
-    "Keywords: 3-6 short noun phrases. No preamble, no markdown, no code fences."
+    "Keywords: 3-6 short noun phrases drawn from the chunk's distinctive terms. "
+    "No preamble, no markdown, no code fences."
 )
 
 
