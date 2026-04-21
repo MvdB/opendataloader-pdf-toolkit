@@ -1,0 +1,56 @@
+# Optional compose overlay: adds an Ollama service so --embed can reach an
+# embedding-trained model (Gemma 4 is chat/VLM only). `nomic-embed-text` is
+# lightweight (~140 MB), runs CPU-only fine, and exposes an OpenAI-compatible
+# `/v1/embeddings` endpoint at http://ollama:11434/v1.
+#
+# Compose with the vLLM overlay to get "vLLM for chat, Ollama for embeddings":
+#   docker compose -f docker-compose.yml -f docker-compose.vllm.yml -f docker-compose.ollama.yml up --build
+#
+# Or use Ollama standalone (serves both chat and embeddings from Ollama):
+#   docker compose -f docker-compose.yml -f docker-compose.ollama.yml up --build
+#
+# Pull the embedding model after the service is up:
+#   docker exec pdf-toolkit-ollama-1 ollama pull nomic-embed-text
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: pdf-toolkit-ollama
+    expose:
+      - "11434"
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    # CPU-only is fine for nomic-embed-text. Uncomment the `deploy` block for
+    # GPU passthrough (e.g. if you want Ollama to handle chat too on a second GPU).
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -sf http://127.0.0.1:11434/api/tags > /dev/null || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
+  api:
+    environment:
+      EMBEDDING_BASE_URL: http://ollama:11434/v1
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+      # If you're NOT also running docker-compose.vllm.yml, let Ollama serve chat too:
+      # LLM_BASE_URL: http://ollama:11434/v1
+      # LLM_MODEL: ${LLM_MODEL:-llama3.2:3b}
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+volumes:
+  ollama-models:
