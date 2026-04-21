@@ -21,7 +21,7 @@ Before enabling enrichment on sensitive documents, confirm the data-handling pol
 
 ## Known risks and non-mitigations
 
-- **No authentication by default.** The web UI binds to `0.0.0.0` and accepts uploads from anyone who can reach the port. Deploy behind an authenticating reverse proxy (Keycloak / OIDC / your SSO) before exposing to untrusted networks. The `auth.py` dependency seam in `src/pdf_toolkit/web/` is reserved for plugging in OIDC verification without touching route bodies.
+- **No authentication by default.** The web UI binds to `0.0.0.0` and accepts uploads from anyone who can reach the port. Deploy behind an authenticating reverse proxy (Keycloak / OIDC / your SSO) before exposing to untrusted networks. Alternatively, install the `[auth]` extra and set `KEYCLOAK_JWKS_URL` (plus optional `KEYCLOAK_AUDIENCE`, `KEYCLOAK_ISSUER`, `KEYCLOAK_REQUIRED_SCOPE`) to turn on in-process JWT verification against any OIDC provider's JWKS endpoint — the `auth.py` dependency seam does the verification so route bodies stay unchanged.
 - **Jobs are in-process** and retain uploaded PDFs plus extracted output on disk for the lifetime of the container. Treat `OUTPUT_DIR` as sensitive.
 - **No input validation beyond content-type.** A malicious or malformed PDF can consume significant CPU and memory on the host running the Java backend.
 - **Hybrid backend** pulls `docling` and `easyocr`, which download model weights to the runtime environment on first use. Audit the supply chain of those dependencies before enabling OCR in high-trust environments.
